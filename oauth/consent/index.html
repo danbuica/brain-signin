@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Second brain · Sign in</title>
+<style>
+  :root { --bg:#f6f5f2; --card:#fff; --ink:#1d1d1f; --muted:#6b6b70; --line:#e4e2dc; --accent:#2f6b4f; --accent-ink:#fff; --bad:#a33; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#141414; --card:#1e1e1e; --ink:#f2f2f2; --muted:#a0a0a6; --line:#2e2e2e; --accent:#5fae86; --accent-ink:#0f1a14; --bad:#e07a7a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; padding:16px;
+         background:var(--bg); color:var(--ink); font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  .card { width:100%; max-width:400px; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:28px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  p { margin:0 0 16px; color:var(--muted); }
+  label { display:block; font-size:14px; margin:12px 0 4px; }
+  input { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:transparent; color:var(--ink); font:inherit; }
+  button { width:100%; padding:11px; margin-top:16px; border:0; border-radius:8px; font:inherit; font-weight:600; cursor:pointer; }
+  .primary { background:var(--accent); color:var(--accent-ink); }
+  .secondary { background:transparent; color:var(--ink); border:1px solid var(--line); margin-top:8px; }
+  .who { padding:12px; border:1px solid var(--line); border-radius:8px; margin:12px 0 4px; font-size:14px; }
+  .who strong { display:block; font-size:16px; }
+  .err { color:var(--bad); font-size:14px; margin-top:12px; min-height:1em; }
+  .link { background:none; border:0; color:var(--muted); text-decoration:underline; padding:0; margin-top:14px; width:auto; font-weight:400; font-size:14px; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main class="card">
+  <section id="loading"><p>Loading…</p></section>
+
+  <section id="login" hidden>
+    <h1>Sign in to your second brain</h1>
+    <p>Use the email and password your brain's admin gave you.</p>
+    <form id="login-form">
+      <label for="email">Email</label>
+      <input id="email" type="email" autocomplete="username" required>
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" required>
+      <button class="primary" type="submit">Sign in</button>
+    </form>
+  </section>
+
+  <section id="consent" hidden>
+    <h1>Allow access to your brain?</h1>
+    <p><span id="client-name"></span> wants to read and save notes in your second brain as you.</p>
+    <div class="who">Signed in as <strong id="user-email"></strong></div>
+    <p style="font-size:13px;margin-top:8px">It will send you back to <span id="redirect-host"></span>.</p>
+    <button class="primary" id="approve">Allow</button>
+    <button class="secondary" id="deny">Deny</button>
+    <button class="link" id="switch">Not you? Sign in with another account</button>
+  </section>
+
+  <section id="message" hidden>
+    <h1 id="message-title"></h1>
+    <p id="message-text"></p>
+  </section>
+
+  <div class="err" id="error"></div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
+<script>
+  // Public values: the project URL and its publishable key are meant to be visible in browsers.
+  const SUPABASE_URL = "https://ohqprovypewgvcxagyhr.supabase.co";
+  const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_pMVIm2q8eUn2H2tVSJ-tQQ_nIbkvh03";
+
+  const sb = supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+  const authorizationId = new URLSearchParams(location.search).get("authorization_id");
+  const $ = (id) => document.getElementById(id);
+
+  function show(section) {
+    for (const s of ["loading", "login", "consent", "message"]) $(s).hidden = s !== section;
+  }
+  function message(title, text) {
+    $("message-title").textContent = title;
+    $("message-text").textContent = text;
+    show("message");
+  }
+  function error(text) { $("error").textContent = text || ""; }
+
+  async function start() {
+    error("");
+    if (!authorizationId) {
+      return message("Second brain", "This page opens when you connect the brain from Claude or ChatGPT. Add the brain as a connector there to get started.");
+    }
+    const { data: { session } } = await sb.auth.getSession();
+    if (!session) return show("login");
+
+    const { data, error: err } = await sb.auth.oauth.getAuthorizationDetails(authorizationId);
+    if (err || !data) {
+      return message("This link has expired", "Go back to Claude or ChatGPT and connect the brain again. (" + (err?.message || "unknown error") + ")");
+    }
+    if (!("authorization_id" in data)) {
+      // Already approved before: go straight back.
+      message("Connected", "Taking you back…");
+      return location.assign(data.redirect_url);
+    }
+    $("client-name").textContent = data.client?.name || data.client?.client_name || "An app";
+    $("user-email").textContent = data.user?.email || session.user.email;
+    try { $("redirect-host").textContent = new URL(data.redirect_uri).host; } catch { $("redirect-host").textContent = data.redirect_uri; }
+    show("consent");
+  }
+
+  async function decide(approve) {
+    $("approve").disabled = $("deny").disabled = true;
+    const fn = approve ? sb.auth.oauth.approveAuthorization : sb.auth.oauth.denyAuthorization;
+    const { data, error: err } = await fn.call(sb.auth.oauth, authorizationId, { skipBrowserRedirect: true });
+    if (err || !data?.redirect_url) {
+      $("approve").disabled = $("deny").disabled = false;
+      return error(err?.message || "Something went wrong. Try again.");
+    }
+    message(approve ? "Connected" : "Access denied", "Taking you back…");
+    location.assign(data.redirect_url);
+  }
+
+  $("login-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    error("");
+    const { error: err } = await sb.auth.signInWithPassword({ email: $("email").value.trim(), password: $("password").value });
+    if (err) return error(err.message === "Invalid login credentials" ? "Wrong email or password." : err.message);
+    start();
+  });
+  $("approve").addEventListener("click", () => decide(true));
+  $("deny").addEventListener("click", () => decide(false));
+  $("switch").addEventListener("click", async () => { await sb.auth.signOut(); show("login"); });
+
+  start().catch((e) => { show("login"); error(e.message); });
+</script>
+</body>
+</html>
