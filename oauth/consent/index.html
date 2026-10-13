@@ -44,6 +44,13 @@
     </form>
   </section>
 
+  <section id="account" hidden>
+    <h1>Connect your brain</h1>
+    <div class="who">Signed in as <strong id="account-email"></strong></div>
+    <button class="primary" id="continue">Continue</button>
+    <button class="link" id="other">Use another account</button>
+  </section>
+
   <section id="consent" hidden>
     <h1>Allow access to your brain?</h1>
     <p><span id="client-name"></span> wants to read and save notes in your second brain as you.</p>
@@ -73,7 +80,7 @@
   const $ = (id) => document.getElementById(id);
 
   function show(section) {
-    for (const s of ["loading", "login", "consent", "message"]) $(s).hidden = s !== section;
+    for (const s of ["loading", "login", "account", "consent", "message"]) $(s).hidden = s !== section;
   }
   function message(title, text) {
     $("message-title").textContent = title;
@@ -82,13 +89,19 @@
   }
   function error(text) { $("error").textContent = text || ""; }
 
-  async function start() {
+  // The first account that opens an authorization owns it, so the account is chosen
+  // before the authorization is fetched. Switching after that would leave it unusable.
+  async function start(confirmed) {
     error("");
     if (!authorizationId) {
       return message("Second brain", "This page opens when you connect the brain from Claude or ChatGPT. Add the brain as a connector there to get started.");
     }
     const { data: { session } } = await sb.auth.getSession();
     if (!session) return show("login");
+    if (!confirmed) {
+      $("account-email").textContent = session.user.email;
+      return show("account");
+    }
 
     const { data, error: err } = await sb.auth.oauth.getAuthorizationDetails(authorizationId);
     if (err || !data) {
@@ -122,13 +135,18 @@
     error("");
     const { error: err } = await sb.auth.signInWithPassword({ email: $("email").value.trim(), password: $("password").value });
     if (err) return error(err.message === "Invalid login credentials" ? "Wrong email or password." : err.message);
-    start();
+    start(true);
   });
+  $("continue").addEventListener("click", () => start(true).catch((e) => error(e.message)));
+  $("other").addEventListener("click", async () => { await sb.auth.signOut(); show("login"); });
   $("approve").addEventListener("click", () => decide(true));
   $("deny").addEventListener("click", () => decide(false));
-  $("switch").addEventListener("click", async () => { await sb.auth.signOut(); show("login"); });
+  $("switch").addEventListener("click", async () => {
+    await sb.auth.signOut();
+    message("Signed out", "Go back to Claude or ChatGPT and connect the brain again to sign in with another account.");
+  });
 
-  start().catch((e) => { show("login"); error(e.message); });
+  start(false).catch((e) => { show("login"); error(e.message); });
 </script>
 </body>
 </html>
